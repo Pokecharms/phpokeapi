@@ -55,7 +55,7 @@ use PokeAPI\Pokemon\VersionGroup;
 use ProxyManager\Factory\LazyLoadingValueHolderFactory;
 use ProxyManager\Proxy\LazyLoadingInterface;
 use Psr\SimpleCache\CacheInterface;
-use Symfony\Component\Cache\Simple\FilesystemCache;
+use Symfony\Component\Cache\Adapter\FilesystemAdapter;
 
 /**
  * Class Client
@@ -92,7 +92,7 @@ class Client
     public function __construct(string $url = 'https://pokeapi.co/api/v2/', CacheInterface $cache = null, SerializerInterface $serializer = null, callable $callback = null)
     {
         $this->baseUrl = $url;
-        $this->cache = $cache ?: new FilesystemCache('pokeapi');
+        $this->cache = $cache ?: new FilesystemAdapter('pokeapi');
         $this->serializer = $serializer ?: PokeApiJmsSerializerBuilder::build($this);
         $this->callback = is_callable($callback) ? $callback : $this->getDefaultCallback();
     }
@@ -623,12 +623,13 @@ class Client
      * @return mixed
      * @throws NetworkException
      * @throws \Psr\SimpleCache\InvalidArgumentException
+     * @throws \Psr\Cache\InvalidArgumentException
      */
     public function sendRequest(string $className, $identifier)
     {
         $uri = $className::POKEAPI_ENDPOINT;
         $uri = str_replace($this->baseUrl, '', $uri);
-        
+
         $url = sprintf(
             "%s%s/",
             $this->baseUrl,
@@ -637,9 +638,10 @@ class Client
 
         $url .= str_replace($url, '', $identifier);
         $cache_key = urlencode($url);
+        $cache_item = $this->cache->getItem($cache_key);
 
-        if ($this->cache->has($cache_key)) {
-            return $this->deserialize($className, $this->cache->get($cache_key));
+        if ($cache_item->isHit()) {
+            return $this->deserialize($className, $cache_item->get());
         }
 
         $callback = $this->callback;
@@ -652,7 +654,7 @@ class Client
 
         $data = json_encode($data);
 
-        $this->cache->set($cache_key, $data);
+        $cache_item->set($cache_key, $data);
 
         return $this->deserialize($className, $data);
     }
@@ -660,7 +662,7 @@ class Client
     /**
      * @param string $className
      * @param string $data
-     * @return array|\JMS\Serializer\scalar|mixed|object 
+     * @return array|\JMS\Serializer\scalar|mixed|object
      */
     protected function deserialize(string $className, string $data)
     {
@@ -696,7 +698,7 @@ class Client
             curl_close($ch);
 
             if ($http_code != 200) {
-                throw new NetworkException($url, $data);
+                throw new NetworkException($data, $http_code);
             }
 
             return json_decode($data, true);
